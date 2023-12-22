@@ -61,6 +61,7 @@ const workerConfigs = workerFile.map(file => ({
       inlineSourceMap: true,
       sourceMap: true,
     }),
+    production && terser(),
   ],
 }))
 
