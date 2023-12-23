@@ -75,7 +75,7 @@ export async function plot(curve: EllipticCurve, points: { x: number[]; y: numbe
     [
       {
         mode: 'lines',
-        range: [start - delta / 100, end + delta / 10],
+        range: [start - delta / 40, end + delta],
         hoverinfo: 'x+y',
         uid: 'elliptic-curve',
         x: t => {
