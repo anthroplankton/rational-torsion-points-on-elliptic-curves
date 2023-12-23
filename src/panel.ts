@@ -1,12 +1,14 @@
 import { readonly, writable } from 'svelte/store'
-import nagellLutzFactorsWorker from 'worker:nagell-lutz'
+import NagellLutzFactorsWorker from 'worker:nagell-lutz'
 import RationalZerosWorker from 'worker:rational-zeros'
-import { EllipticCurve } from './elliptic-cruves'
-import { abs } from './math'
 import plt from './plot'
-import { queue, type QueueObject } from 'async'
+import { WorkerPool, type PostMessage } from './worker'
+import type { EllipticCurve } from './elliptic-cruves'
+import type { Polynomial } from './polynomials'
+import { abs } from './math'
 
-const workers: { worker: Worker; reject: (reason?: string) => void }[] = []
+let computeNagellLutzFactorsWorkerPool: WorkerPool<EllipticCurve, bigint, bigint>
+let computeRationalZerosWorkerPool: WorkerPool<bigint, Polynomial, bigint>
 
 const computingStatus = writable({
   yCandidatesDone: true,
@@ -22,72 +24,45 @@ const integralPoints = writable(new Map<bigint, bigint[]>())
 export const integralPointsStore = readonly(integralPoints)
 
 export function stop() {
-  computeIntegralPointTasks?.kill()
-  for (const { reject, worker } of workers) {
-    worker.terminate()
-    reject('stop')
-  }
+  computeNagellLutzFactorsWorkerPool?.terminate()
+  computeRationalZerosWorkerPool?.terminate()
   computingStatus.update(s => ((s.allDone = true), s))
 }
 
-let computeIntegralPointTasks: QueueObject<bigint>
-async function computeIntegralPoints(curve: EllipticCurve, y: bigint) {
-  const worker = new RationalZerosWorker()
-  await Promise.all([
-    new Promise<void>((resolve, reject) => {
-      workers.push({ worker, reject })
-      worker.onmessage = event => {
-        const data: bigint | null = event.data
-        if (data == null) {
-          worker.terminate()
-          resolve()
-          return
-        }
-        integralPoints.update(m => {
-          if (!m.has(y)) {
-            m.set(y, [])
-            m.set(-y, [])
-          }
-          m.get(y)!.push(data)
-          if (y != 0n) m.get(-y)!.push(data)
-          return m
-        })
-      }
-    }),
-    worker.postMessage(curve.f.add(-y * y)),
-  ])
-  computingStatus.update(s => (s.integralPointsDone.add(y), s))
+async function computeNagellLutzFactors(curve: EllipticCurve, postMessage: PostMessage<bigint, bigint>) {
+  await postMessage(abs(curve.discriminant), factor => {
+    yCandidates.update(y => (y.push(factor), y))
+    computeRationalZerosWorkerPool.put(factor)
+  })
+  computingStatus.update(s => ((s.yCandidatesDone = true), s))
 }
 
-async function computeSquarableFactor(curve: EllipticCurve) {
-  const worker = new nagellLutzFactorsWorker()
-  await Promise.all([
-    new Promise<void>((resolve, reject) => {
-      workers.push({ worker, reject })
-      worker.onmessage = event => {
-        const data: bigint | null = event.data
-        if (data == null) {
-          worker.terminate()
-          resolve()
-          return
-        }
-        yCandidates.update(y => (y.push(data), y))
-        computeIntegralPointTasks.push(data)
-      }
-    }),
-    worker.postMessage(abs(curve.discriminant)),
-  ])
-  computingStatus.update(s => ((s.yCandidatesDone = true), s))
+async function computeRationalZeros(curve: EllipticCurve, y: bigint, postMessage: PostMessage<Polynomial, bigint>) {
+  await postMessage(curve.f.add(-y * y), x => {
+    integralPoints.update(map => {
+      const xs = map.get(y) ?? []
+      xs.push(x)
+      map.set(y, xs)
+      return map
+    })
+  })
+  computingStatus.update(s => (s.integralPointsDone.add(y), s))
 }
 
 export async function compute(curve: EllipticCurve) {
   computingStatus.set({ yCandidatesDone: false, integralPointsDone: new Set(), allDone: false })
   yCandidates.set([0n])
   integralPoints.set(new Map())
-  computeIntegralPointTasks = queue(async (y: bigint) => await computeIntegralPoints(curve, y), 16)
-  computeIntegralPointTasks.push(0n)
-  await computeSquarableFactor(curve)
-  await computeIntegralPointTasks.drain()
+  computeNagellLutzFactorsWorkerPool = new WorkerPool(NagellLutzFactorsWorker, computeNagellLutzFactors)
+  computeRationalZerosWorkerPool = new WorkerPool(
+    RationalZerosWorker,
+    async (y, postMessage) => await computeRationalZeros(curve, y, postMessage),
+    16
+  )
+  computeRationalZerosWorkerPool.put(0n)
+  computeNagellLutzFactorsWorkerPool.put(curve)
+  await computeNagellLutzFactorsWorkerPool.drain()
+  await computeRationalZerosWorkerPool.drain()
   computingStatus.update(c => ((c.allDone = true), c))
 }
 

@@ -34,12 +34,8 @@
   <form
     on:submit|preventDefault={async () => {
       stop()
-      try {
-        curve = inputCurve
-        await compute(curve)
-      } catch (err) {
-        console.warn(err)
-      }
+      curve = inputCurve
+      await compute(curve)
     }}
   >
     <Coefficient name="a" bind:coefficient={a} bind:this={coefficients[0]} />
@@ -54,6 +50,7 @@
             on:click={() => {
               if (curve) {
                 curve = undefined
+                y = undefined
                 yCandidates = []
                 integralPoints = new Map()
               } else {
