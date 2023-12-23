@@ -8,15 +8,15 @@ export class WorkerPool<T, TMessage, TResult> {
   private queue: QueueObject<T>
   private workers: Worker[]
   private rejections: ((reason?: string) => void)[]
-  private idelWorkerIndexs: number[]
+  private idelWorkerIndexes: number[]
   constructor(Worker: new () => Worker, executor: Executor<T, TMessage, TResult>, concurrency: number = 1) {
     this.workers = times(concurrency, () => new Worker())
     this.rejections = times(concurrency, () => () => {})
-    this.idelWorkerIndexs = range(concurrency)
+    this.idelWorkerIndexes = range(concurrency)
     this.queue = queue(
       async (task: T) =>
         await executor(task, async (message, callback) => {
-          const index = this.idelWorkerIndexs.pop()!
+          const index = this.idelWorkerIndexes.pop()!
           const worker = this.workers[index]
           await Promise.all([
             new Promise<void>((resolve, reject) => {
@@ -32,7 +32,7 @@ export class WorkerPool<T, TMessage, TResult> {
             }),
             worker.postMessage(message),
           ])
-          this.idelWorkerIndexs.push(index)
+          this.idelWorkerIndexes.push(index)
         }),
       concurrency
     )
