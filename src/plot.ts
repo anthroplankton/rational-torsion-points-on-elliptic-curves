@@ -1,4 +1,4 @@
-import { findIndex, map, omit, pick, range } from 'lodash'
+import lo from 'lodash'
 import Plotly from 'plotly.js'
 import { get, readonly, writable } from 'svelte/store'
 import type { PlotlyHTMLElement } from 'plotly.js'
@@ -81,12 +81,12 @@ async function plot(
   options: { relayout?: boolean; reset?: boolean } = { relayout: false, reset: false }
 ) {
   traces = traces instanceof Array ? traces : [traces]
-  const responsives = traces.filter(isResponsiveData).map(t => pick(t, 'x', 'y', 'uid'))
+  const responsives = traces.filter(isResponsiveData).map(t => lo(t).pick('x', 'y', 'uid').value())
   const nomrals = traces.map(trace => {
     if (!isResponsiveData(trace)) return trace
-    if (!trace.range) return omit(trace, 'x', 'y')
+    if (!trace.range) return lo(trace).omit('x', 'y').value()
     const [start, end] = trace.range
-    const t = range(start, end, (end - start) / nPoints)
+    const t = lo.range(start, end, (end - start) / nPoints)
     const x = trace.x(t)
     const y = trace.y(t)
     return Object.assign({}, trace, { x, y })
@@ -110,7 +110,7 @@ async function plot(
     if (!start || !end) return
     const nomrals = responsives.map(trace => {
       const uid = trace.uid
-      const t = range(start, end, (end - start) / nPoints)
+      const t = lo.range(start, end, (end - start) / nPoints)
       const x = trace.x(t)
       const y = trace.y(t)
       return { x, y, uid }
@@ -123,9 +123,9 @@ async function plot(
 async function update(traces: PlotlyData | PlotlyData[]) {
   traces = traces instanceof Array ? traces : [traces]
   const plot = get(plotStore)
-  const traceIndices = traces.map(t => findIndex(plot.data, { uid: t.uid }))
-  const update = { x: map(traces, 'x'), y: map(traces, 'y') }
-  await Plotly.update(plot, update, {}, traceIndices)
+  const traceIndices = traces.map(t => lo(plot.data).findIndex({ uid: t.uid }))
+  const update = { x: lo(traces).map('x').value(), y: lo(traces).map('y').value() }
+  return await Plotly.update(plot, update, {}, traceIndices)
 }
 
 export default Object.assign(readonly(plotStore), { newPlot, plot, update })

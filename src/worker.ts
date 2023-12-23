@@ -1,5 +1,5 @@
 import { queue, type QueueObject } from 'async'
-import { range, times } from 'lodash'
+import lo from 'lodash'
 
 export type PostMessage<TMessage, TResult> = (message: TMessage, callback: (result: TResult) => void) => Promise<void>
 export type Executor<T, TMessage, TResult> = (task: T, execute: PostMessage<TMessage, TResult>) => Promise<void>
@@ -10,9 +10,9 @@ export class WorkerPool<T, TMessage, TResult> {
   private rejections: ((reason?: string) => void)[]
   private idelWorkerIndexes: number[]
   constructor(Worker: new () => Worker, executor: Executor<T, TMessage, TResult>, concurrency: number = 1) {
-    this.workers = times(concurrency, () => new Worker())
-    this.rejections = times(concurrency, () => () => {})
-    this.idelWorkerIndexes = range(concurrency)
+    this.workers = lo(concurrency).times(() => new Worker())
+    this.rejections = lo(concurrency).times(() => () => {})
+    this.idelWorkerIndexes = lo.range(concurrency)
     this.queue = queue(
       async (task: T) =>
         await executor(task, async (message, callback) => {
