@@ -1,69 +1,110 @@
-import { readonly, writable } from 'svelte/store'
+import lo from 'lodash'
+import { get, readonly, writable } from 'svelte/store'
 import NagellLutzFactorsWorker from 'worker:nagell-lutz'
 import RationalZerosWorker from 'worker:rational-zeros'
 import plt from './plot'
 import { WorkerPool, type PostMessage } from './worker'
-import type { EllipticCurve } from './elliptic-cruves'
-import type { Polynomial } from './polynomials'
+import { origin, Point, type EllipticCurve } from './elliptic-cruves'
+import type { Cubic } from './polynomials'
 import { abs } from './math'
 
 let computeNagellLutzFactorsWorkerPool: WorkerPool<EllipticCurve, bigint, bigint>
-let computeRationalZerosWorkerPool: WorkerPool<bigint, Polynomial, bigint>
+let computeRationalZerosWorkerPool: WorkerPool<bigint, Cubic<bigint>, bigint>
+
+function inplaced<T>(updater: (value: T) => void) {
+  return (value: T) => {
+    updater(value)
+    return value
+  }
+}
 
 const computingStatus = writable({
   yCandidatesDone: true,
   integralPointsDone: new Set<bigint>(),
-  allDone: true,
+  finish: true,
 })
 export const computingStatusStore = readonly(computingStatus)
 
 const yCandidates = writable<bigint[]>([])
 export const yCandidatesStore = readonly(yCandidates)
 
-const integralPoints = writable(new Map<bigint, bigint[]>())
+const integralPoints = writable(new Map<bigint, Set<bigint>>())
 export const integralPointsStore = readonly(integralPoints)
+
+const xTorsionPoints = new Set<bigint>()
+const torsionPoints = writable<[bigint, bigint][]>([])
+export const torsionPointsStore = readonly(torsionPoints)
 
 export function stop() {
   computeNagellLutzFactorsWorkerPool?.terminate()
   computeRationalZerosWorkerPool?.terminate()
-  computingStatus.update(s => ((s.allDone = true), s))
+  computingStatus.update(inplaced(s => (s.finish = true)))
 }
 
 async function computeNagellLutzFactors(curve: EllipticCurve, postMessage: PostMessage<bigint, bigint>) {
   await postMessage(abs(curve.discriminant), factor => {
-    yCandidates.update(y => (y.push(factor), y))
+    yCandidates.update(inplaced(y => y.push(factor)))
     computeRationalZerosWorkerPool.put(factor)
   })
-  computingStatus.update(s => ((s.yCandidatesDone = true), s))
+  computingStatus.update(inplaced(s => (s.yCandidatesDone = true)))
 }
 
-async function computeRationalZeros(curve: EllipticCurve, y: bigint, postMessage: PostMessage<Polynomial, bigint>) {
-  await postMessage(curve.f.add(-y * y), x => {
+async function computeRationalZeros(curve: EllipticCurve, y: bigint, postMessage: PostMessage<Cubic<bigint>, bigint>) {
+  await postMessage(curve.f.sub(y * y), x => {
     integralPoints.update(map => {
-      const xs = map.get(y) ?? []
-      xs.push(x)
+      const xs = map.get(y) ?? new Set()
+      xs.add(x)
       map.set(y, xs)
       return map
     })
+    computeTorsionPoints(curve, x, y)
   })
-  computingStatus.update(s => (s.integralPointsDone.add(y), s))
+  computingStatus.update(inplaced(s => s.integralPointsDone.add(y)))
+}
+
+function computeTorsionPoints(curve: EllipticCurve, x: bigint, y: bigint) {
+  const p = new Point(x, y)
+  const points: Point[] = [p]
+  for (let i = 1; i < 12; ++i) {
+    const q = points[i - 1]
+    // if (xTorsionPoints.has(x)) break
+    const [df, y2] = curve.slope(p, q)
+    if (y2 != 0n && df % y2 != 0n) return
+    const r = curve.sum(p, q)
+    if (r == origin) break
+    points.push(r)
+  }
+  if (points.length < 12) {
+    torsionPoints.update(arr => {
+      for (const q of points) {
+        xTorsionPoints.add(x)
+        arr.push([q.x, q.y])
+        // arr.push([q.x, -q.y])
+      }
+      return lo(arr).uniqWith(lo.isEqual).value()
+    })
+  }
+  if (get(torsionPoints).length >= 15 || points.length >= 8) {
+    stop()
+  }
 }
 
 export async function compute(curve: EllipticCurve) {
-  computingStatus.set({ yCandidatesDone: false, integralPointsDone: new Set(), allDone: false })
+  computingStatus.set({ yCandidatesDone: false, integralPointsDone: new Set(), finish: false })
   yCandidates.set([0n])
   integralPoints.set(new Map())
+  torsionPoints.set([])
   computeNagellLutzFactorsWorkerPool = new WorkerPool(NagellLutzFactorsWorker, computeNagellLutzFactors)
   computeRationalZerosWorkerPool = new WorkerPool(
     RationalZerosWorker,
     async (y, postMessage) => await computeRationalZeros(curve, y, postMessage),
     16
   )
-  computeRationalZerosWorkerPool.put(0n)
-  computeNagellLutzFactorsWorkerPool.put(curve)
+  await computeRationalZerosWorkerPool.put(0n)
+  await computeNagellLutzFactorsWorkerPool.put(curve)
   await computeNagellLutzFactorsWorkerPool.drain()
   await computeRationalZerosWorkerPool.drain()
-  computingStatus.update(c => ((c.allDone = true), c))
+  computingStatus.update(inplaced(c => (c.finish = true)))
 }
 
 export async function plot(curve: EllipticCurve, points: { x: number[]; y: number[] } = { x: [], y: [] }) {
@@ -101,7 +142,15 @@ export async function plot(curve: EllipticCurve, points: { x: number[]; y: numbe
           return [...y, null, ...y.map(y => -y), ...broke]
         },
       },
-      { mode: 'markers', hoverinfo: 'x+y', marker: { size: 8 }, uid: 'points', ...points },
+      {
+        mode: 'markers',
+        hoverinfo: 'x+y',
+        xhoverformat: 'd',
+        yhoverformat: 'd',
+        marker: { size: 8 },
+        uid: 'points',
+        ...points,
+      },
     ],
     { relayout: true, reset: true }
   )

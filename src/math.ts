@@ -41,16 +41,6 @@ export function* nagellLutzFactors(n: bigint) {
   }
 }
 
-export function solve_quadratic(c: number, b: number, a: number) {
-  const d = b * b - 4 * a * c
-  if (d < 0) return []
-  const s0 = b + Math.sqrt(d)
-  const s1 = b - Math.sqrt(d)
-  const x0 = isclose(s0, 0) ? s1 / -2 / a : (-2 * c) / s0
-  const x1 = isclose(s1, 0) ? s0 / -2 / a : (-2 * c) / s1
-  return [x0, x1]
-}
-
 const primesJSONPath = '/primes.json'
 let prinms: number[]
 export const prime = {

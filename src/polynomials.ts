@@ -1,22 +1,41 @@
-import { chain } from 'lodash'
-import { factors, isclose, solve_quadratic } from './math'
+import lo from 'lodash'
+import { factors, isclose } from './math'
 
-export class Polynomial extends Array<bigint> {
-  add(other: bigint): Polynomial
-  add(other: Polynomial): Polynomial
-  add(other: Polynomial | bigint) {
-    if (typeof other == 'object') {
-      const [shorter, longer] = Polynomial.sort(this, other)
-      return new Polynomial(...longer.map((longer, i) => (i < shorter.length ? longer + shorter[i] : longer)))
-    } else {
-      return new Polynomial(this[0] + other, ...this.slice(1))
-    }
+export class Polynomial<T extends bigint | number> extends Array<T> {
+  add(other: T): Polynomial<T>
+  add(other: T[]): Polynomial<T>
+  add(other: T[] | T) {
+    const coefficients = lo(this)
+      .zipWith(other instanceof Array ? other : [other], (t, o) => {
+        t = t ?? 0n
+        o = o ?? 0n
+        return typeof t == 'bigint' && typeof o == 'bigint' ? t + o : Number(t) + Number(o)
+      })
+      .value()
+    return new Polynomial(...coefficients)
   }
 
-  apply(x: bigint): bigint
+  sub(other: T): Polynomial<T>
+  sub(other: T[]): Polynomial<T>
+  sub(other: T[] | T) {
+    const coefficients = lo(this)
+      .zipWith(typeof other == 'object' ? other : [other], (t, o) => {
+        t = t ?? 0n
+        o = o ?? 0n
+        return typeof t == 'bigint' && typeof o == 'bigint' ? t - o : Number(t) - Number(o)
+      })
+      .value()
+    return new Polynomial(...coefficients)
+  }
+
+  private isWithBigintCoefficients(): this is Polynomial<bigint> {
+    return lo(this).every(c => typeof c == 'bigint')
+  }
+
+  apply(x: bigint): T
   apply(x: number): number
-  apply<T extends bigint | number>(x: T) {
-    if (typeof x == 'bigint') {
+  apply(x: bigint | number) {
+    if (typeof x == 'bigint' && this.isWithBigintCoefficients()) {
       let p = 0n
       for (let i = this.length - 1; i > -1; --i) {
         p = p * x + this[i]
@@ -25,28 +44,26 @@ export class Polynomial extends Array<bigint> {
     } else {
       let p = 0
       for (let i = this.length - 1; i > -1; --i) {
-        p = p * x + Number(this[i])
+        p = p * Number(x) + Number(this[i])
       }
       return p
     }
   }
-
-  equal(other: Polynomial) {
-    const [shorter, longer] = Polynomial.sort(this, other)
-    return chain(longer)
-      .map((c, i) => (i < shorter.length ? c == shorter[i] : c == 0n))
+  equal(other: Polynomial<T>) {
+    return lo(this)
+      .zipWith(other, (t, o) => (t ?? 0n) == (o ?? 0n))
       .every()
-      .value()
   }
 
   *rationalZeros() {
-    let i
-    for (i = 0; i < this.length; ++i) {
+    if (!this.isWithBigintCoefficients()) return
+    let i = 0
+    for (; i < this.length; ++i) {
       if (this[i] != 0n) break
     }
     if (i == this.length) return
     if (i != 0) yield 0n
-    for (const d of factors(this[i])) {
+    for (const d of factors(BigInt(this[i]))) {
       if (this.apply(d) == 0n) yield d
     }
   }
@@ -65,7 +82,7 @@ export class Polynomial extends Array<bigint> {
     for (let i = 0; i < iteration; ++i) {
       const [f, df] = this.horner(x)
       if (isclose(f, 0)) return x
-      if (isclose(df, 0, 1e-8)) break
+      if (isclose(df, 0, 1e-12)) break
       const dx = f / df
       if (isclose(dx, 0)) return x
       x -= dx
@@ -82,13 +99,27 @@ export class Polynomial extends Array<bigint> {
       .substring(1)
     return str || '0'
   }
-
-  static sort(...polynomials: Polynomial[]) {
-    return polynomials.sort((a, b) => a.length - b.length)
-  }
 }
 
-export class Cubic extends Polynomial {
+export class Cubic<T extends bigint | number> extends Polynomial<T> {
+  constructor(...coefficients: [T, T, T, T]) {
+    super(...coefficients)
+  }
+
+  override add(other: T): Cubic<T>
+  override add(other: Cubic<T>): Cubic<T>
+  override add(other: T[]): Polynomial<T>
+  override add(other: T[] | T) {
+    return super.add(other instanceof Array ? other : [other])
+  }
+
+  override sub(other: T): Cubic<T>
+  override sub(other: Cubic<T>): Cubic<T>
+  override sub(other: T[]): Polynomial<T>
+  override sub(other: T[] | T) {
+    return super.sub(other instanceof Array ? other : [other])
+  }
+
   zeros() {
     const [d, c, b, a] = this.map(Number)
     let x0
@@ -102,16 +133,33 @@ export class Cubic extends Polynomial {
     const aa = a
     const bb = aa * x0 + b
     const cc = bb * x0 + c
-    return [x0, ...solve_quadratic(cc, bb, aa)]
+    return [x0, ...new Quadratic(cc, bb, aa).zeros()]
   }
 
   criticals() {
     const [, c, b, a] = this.map(Number)
-    return solve_quadratic(c, 2 * b, 3 * a)
+    return new Quadratic(c, 2 * b, 3 * a).zeros()
   }
 
   inflections() {
     const [, , b, a] = this.map(Number)
     return b / -3 / a
+  }
+}
+
+export class Quadratic<T extends bigint | number> extends Polynomial<T> {
+  constructor(...coefficients: [T, T, T]) {
+    super(...coefficients)
+  }
+
+  zeros() {
+    const [c, b, a] = this.map(Number)
+    const d = b * b - 4 * a * c
+    if (d < 0) return []
+    const s0 = b + Math.sqrt(d)
+    const s1 = b - Math.sqrt(d)
+    const x0 = isclose(s0, 0) ? s1 / -2 / a : (-2 * c) / s0
+    const x1 = isclose(s1, 0) ? s0 / -2 / a : (-2 * c) / s1
+    return [x0, x1]
   }
 }

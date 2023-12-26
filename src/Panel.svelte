@@ -1,9 +1,10 @@
 <script lang="ts">
+  import lo from 'lodash'
   import Coefficient from './Coefficient.svelte'
   import MathJax from './MathJax.svelte'
   import { EllipticCurve } from './elliptic-cruves'
   import { compute, plot, stop } from './panel'
-  import { computingStatusStore, yCandidatesStore, integralPointsStore } from './panel'
+  import { computingStatusStore, yCandidatesStore, integralPointsStore, torsionPointsStore } from './panel'
   import plt from './plot'
 
   let coefficients: Coefficient[] = []
@@ -12,19 +13,17 @@
   let c: bigint = 0n
   let curve: EllipticCurve | undefined
   let y: bigint | undefined
-  let x: bigint[] | undefined
+  let x: Set<bigint> | undefined
   let integralPointsElement: HTMLDivElement
   $: yCandidates = $yCandidatesStore
   $: integralPoints = $integralPointsStore
+  $: torsionPoints = $torsionPointsStore
   $: x = y == undefined ? undefined : integralPoints.get(y)
   $: inputCurve = new EllipticCurve(c, b, a)
   $: if ($plt && (!curve || curve.equal(inputCurve))) {
     plot(inputCurve, {
-      x: Array.from(integralPoints.values()).flat().map(Number),
-      y: Array.from(integralPoints.entries())
-        .map(([y, x]) => Array.from(x).fill(y))
-        .flat()
-        .map(Number),
+      x: torsionPoints.map(([x]) => Number(x)),
+      y: torsionPoints.map(([, y]) => Number(y)),
     })
   }
 </script>
@@ -43,7 +42,7 @@
     <Coefficient name="c" bind:coefficient={c} bind:this={coefficients[2]} />
     <div class="container">
       <div class="row">
-        {#if $computingStatusStore.allDone}
+        {#if $computingStatusStore.finish}
           <button
             type="button"
             class="btn btn-danger me-2 col"
@@ -53,6 +52,7 @@
                 y = undefined
                 yCandidates = []
                 integralPoints = new Map()
+                torsionPoints = []
               } else {
                 for (const coefficient of coefficients) {
                   coefficient.clear()
@@ -65,7 +65,7 @@
         {/if}
         <button type="submit" class="btn btn-primary col" disabled={inputCurve.discriminant == 0n}>
           Compute
-          {#if curve && !$computingStatusStore.allDone}
+          {#if curve && !$computingStatusStore.finish}
             <div class="spinner-border spinner-border-sm"></div>
           {/if}
         </button>
@@ -123,7 +123,9 @@
           {#if x}
             {#each x as x}
               <ul class="list-group m-1">
-                <li class="list-group-item"><MathJax math={`(${x}, ${y})`} /></li>
+                <li class:list-group-item-success={lo(torsionPoints).find(([t]) => t == x)} class="list-group-item">
+                  <MathJax math={`(${x}, ${y})`} />
+                </li>
               </ul>
             {/each}
           {:else if $computingStatusStore.integralPointsDone.has(y)}
